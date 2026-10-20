@@ -6,7 +6,7 @@ from dataset import FreiHAND, MEAN, STD
 FINGERS = [[0,1,2,3,4], [0,5,6,7,8], [0,9,10,11,12], [0,13,14,15,16], [0,17,18,19,20]]
 COLORS = [(0,0,255), (0,165,255), (0,255,0), (255,255,0), (255,0,255)]
 
-ds = FreiHAND("/home/xtimate/projects/hand-tracker/data", train=True)
+ds = FreiHAND("/home/xtimate/Documents/hand-tracker/data", train=True)
 tiles = []
 for i in np.random.choice(len(ds), 8, replace=False):
     img, kp = ds[int(i)]
