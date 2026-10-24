@@ -14,21 +14,25 @@ class HandNet(nn.Module):
         hw = (size // 32) ** 2
         self.fc_x = nn.Linear(hw, size * k)
         self.fc_y = nn.Linear(hw, size * k)
+        self.presence = nn.Linear(576, 1)
 
     def forward(self, x):
-        f = self.kp_conv(self.backbone(x)).flatten(2)
-        return self.fc_x(f), self.fc_y(f)
+        feat = self.backbone(x)
+        f = self.kp_conv(feat).flatten(2)
+        return self.fc_x(f), self.fc_y(f), self.presence(feat.mean((2, 3)))
 
 def _targets(coord, n_bins, k, sigma=6.0):
     bins = torch.arange(n_bins, device=coord.device, dtype=torch.float32)
     t = torch.exp(-0.5 * ((bins - coord.unsqueeze(-1) * k) / sigma) ** 2)
     return t / t.sum(-1, keepdim=True).clamp_min(1e-8)
 
-def simcc_loss(px, py, kp, k=2):
+def simcc_loss(px, py, kp, k=2, mask=None):
     tx = _targets(kp[..., 0], px.shape[-1], k)
     ty = _targets(kp[..., 1], py.shape[-1], k)
-    return (F.kl_div(px.log_softmax(-1), tx, reduction="batchmean")
-        + F.kl_div(py.log_softmax(-1), ty, reduction="batchmean"))
+    l = (F.kl_div(px.log_softmax(-1), tx, reduction="none").sum((-1, -2))) + F.kl_div(py.log_softmax(-1), ty, reduction="none").sum((-1, -2))
+    if mask is None:
+        return l.mean()
+    return (l * mask).sum() / mask.sum().clamp_min(1)
 
 
 def decode(px, py, k=2):
