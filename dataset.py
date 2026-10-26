@@ -66,19 +66,40 @@ class FreiHAND(Dataset):
         a = cv2.GaussianBlur(m, (0, 0), rng.uniform(0.8, 2.0))[..., None]
         return (img * a + bg * (1 - a)).astype(np.uint8)
 
-    def _negative(self, rng):
+    def _bg_crop(self, rng, lo=0.2):
         bg = None
         for _ in range(5):
             bg = cv2.imread(str(self.bgs[rng.integers(len(self.bgs))]))
             if bg is not None:
                 break
         if bg is None:
-            bg = np.zeros((self.size, self.size, 3), np.uint8)
+            return np.zeros((self.size, self. size, 3), np.uint8)
         bg = cv2.cvtColor(bg, cv2.COLOR_BGR2RGB)
         bh, bw = bg.shape[:2]
-        s = max(8, int(min(bh, bw) * rng.uniform(0.2, 1.0)))
+        s = max(8, int(min(bh, bw) * rng.uniform(lo, 1.0)))
         y0, x0 = rng.integers(0, bh - s + 1), rng.integers(0, bw - s + 1)
-        img = cv2.resize(bg[y0:y0 + s, x0:x0 + s], (self.size, self.size))
+        return cv2.resize(bg[y0:y0 + s, x0:x0 + s], (self.size, self.size))
+
+    def _negative(self, rng):
+        img = self._bg_crop(rng)
+        mode = rng.random()
+        if mode < 0.4:
+            k = int(rng.integers(N_UNIQUE))
+            mask = cv2.imread(str(self.root / "training" / "mask" / f"{k:08d}.jpg"), 0)
+            if mask is not None:
+                patch = self._bg_crop(rng)
+                mask = cv2.resize(mask, (self.size, self.size))
+                ks = int(rng.choice([3, 5, 7]))
+                m = cv2.erode((mask > 127).astype(np.float32), np.ones((ks, ks), np.uint8))
+                a = cv2.GaussianBlur(m, (0, 0), rng.uniform(0.8, 2.0))[..., None]
+                img = (patch * a + img * (1 - a)).astype(np.uint8)
+        elif mode < 0.6:
+            c0 = c1 = rng.integers(0, 256, 3)
+            t = np.linspace(0, 1, self.size, dtype=np.float32)
+            t = t[None, :, None] if rng.random() < 0.5 else t[:, None, None]
+            img = np.broadcast_to(c0 * (1 - t) + c1 * t, (self.size, self.size, 3))
+            img = (img + rng.normal(0, rng.uniform(0, 6), img.shape)).clip(0, 255).astype(np.uint8)
+
         if rng.random() < 0.5:
             img = img[:, ::-1]
         img = np.ascontiguousarray(img)
@@ -86,7 +107,6 @@ class FreiHAND(Dataset):
             img = self.photo(image=img)["image"]
         img = ((img.astype(np.float32) / 255.0 - MEAN) / STD).transpose(2, 0, 1)
         return torch.from_numpy(img), torch.zeros(21, 2), torch.tensor(0.0)
-
 
     def __getitem__(self, i):
         idx = int(self.ids[i])

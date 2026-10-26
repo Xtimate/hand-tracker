@@ -2,14 +2,21 @@ import argparse
 from pathlib import Path
 
 import torch
+import time
 from torch._decomp.decompositions import binary_cross_entropy_with_logits
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
-
+from tqdm import tqdm
 from dataset import FreiHAND
 from model import HandNet, decode, simcc_loss
 
 PRES_W = 10.0
+
+def fmt(s):
+    s = int(s)
+    h, r = divmod(s, 3600)
+    m, sec = divmod(r, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
 @torch.no_grad()
 def evaluate(model, loader, device, k=2):
@@ -76,10 +83,15 @@ def main():
     out.mkdir(exist_ok=True)
     best = 0.0
 
+    total_steps = args.epochs * len(train_dl)
+    done_steps = 0
+    t0 = time.time()
+
     for epoch in range(args.epochs):
         model.train()
         run = 0.0
-        for img, kp, pres in train_dl:
+        bar = tqdm(train_dl, desc=f"epoch  {epoch + 1}/{args.epochs}", leave=False, dynamic_ncols=True)
+        for img, kp, pres in bar:
             img, kp, pres = img.to(device), kp.to(device), pres.to(device)
             with torch.autocast(device_type=device, enabled=use_amp):
                 px, py, logit = model(img)
@@ -89,7 +101,11 @@ def main():
             scaler.step(opt)
             scaler.update()
             sched.step()
-            run += loss.item()
+            l = loss.item()
+            run += l
+            done_steps += 1
+            eta = (time.time() - t0) / done_steps * (total_steps - done_steps)
+            bar.set_postfix(loss=f"{l:.3f}", total_left=fmt(eta))
 
         pck, err, _ = evaluate(model, val_dl, device)
         msg = f"epoch {epoch + 1:3d}  loss {run / len(train_dl):.4f}  PCK@0.2 {pck:.3f}  err {err:.2f}px"
