@@ -67,7 +67,11 @@ def main():
             val_ds = Subset(val_ds, range(args.limit // 4))
             val_bg = Subset(val_bg, range(args.limit // 4)) if val_bg is not None else None
 
-    kw = dict(num_workers=args.workers, pin_memory=use_amp, persistent_workers=args.workers > 0)
+    kw = {
+        "num_workers": args.workers,
+        "pin_memory":use_amp,
+        "persistent_workers": args.workers > 0,
+    }
 
     train_dl = DataLoader(train_ds, args.bs, shuffle=True, drop_last=True, **kw)
     val_dl = DataLoader(val_ds, args.bs, **kw)
@@ -77,7 +81,7 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=args.lr, total_steps=args.epochs * len(train_dl))
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp) # type: ignore
 
     out = Path(args.out)
     out.mkdir(exist_ok=True)
