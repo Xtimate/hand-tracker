@@ -75,13 +75,19 @@ class OneEuro:
     def reset(self):
         self.x = None
 
-def next_box(kp, frame_shape, prev_side, margin=2.6, min_frac=0.3):
+def box_from_kp(kp, frame_shape, margin=2.6, min_frac=.3):
     lo, hi = kp.min(0), kp.max(0)
     c = (lo + hi) / 2
     short = min(frame_shape[:2])
-    side = max((hi - lo).max() * margin, 0.9 * prev_side)
-    side = float(np.clip(side, min_frac * short, 1.5 * short))
-    return c[0], c[1], side
+    side = float(np.clip((hi - lo).max() * margin, min_frac * short, 1.5 * short))
+    return float(c[0]), float(c[1]), side
+
+def refine(sess, frame, box, iters=2):
+    kp, p = predict(sess, frame, box)
+    for _ in range(iters):
+        box = box_from_kp(kp, frame.shape)
+        kp, p = predict(sess, frame, box)
+    return kp, p, box
 
 def center_box(shape):
     h, w = shape[:2]
@@ -105,6 +111,7 @@ def main():
     sess = ort.InferenceSession(sys.argv[2] if len(sys.argv) > 2 else "hand.onnx", providers=["CPUExecutionProvider"])
     filt = OneEuro()
     box, ms = None, 0.0
+    lost = 0
     track, flip = True, False
     while True:
         ok, frame = cap.read()
@@ -115,25 +122,33 @@ def main():
         now = time.perf_counter()
         if not track:
             box = center_box(frame.shape)
-        cv2.imshow("crop", crop(frame, *box)) if box is not None else None
-        kp, p = predict(sess, frame, box) if box is not None else  (None, 0.0)
-        if p < KEEP and track:
-            b2, kp2, p2 = scan(sess, frame)
+            kp, p = predict(sess, frame, box)
+        elif box is not None:
+            kp, p, box = refine(sess, frame, box)
+        else:
+            kp, p = None, 0.0
+        lost = lost + 1 if p < KEEP else 0
+        if track and (box is None or lost >= 3):
+            b2, _, p2 = scan(sess, frame)
             if p2 >= ACQUIRE:
-                box, kp, p = b2, kp2, p2
+                kp, p, box = refine(sess, frame, b2)
+                lost = 0
                 filt.reset()
             else:
-                box, kp = None, None
-        ms = 0.889 * ms + 0.1 * (time.perf_counter() - now) * 1000
+                kp, box = None, None
+        ms = 0.9 * ms + 0.1 * (time.perf_counter() - now) * 1000
         if kp is not None:
+            raw = kp
             kp = filt(kp, now)
             draw(frame, kp, box)
-            cv2.putText(frame, f"{p:.2f}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            box = next_box(kp, frame.shape, box[2]) if track else center_box(frame.shape)
+            cv2.putText(frame, f"p={p:.2f}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7, (0, 255, 0), 2)
+            if track:
+                nb = box_from_kp(raw, frame.shape)         # build the next box from the unsmoothed keypoints
+                box = (nb[0], nb[1], 0.8 * box[2] + 0.2 * nb[2])   # centre follows at once, size slowly
         else:
-            x0, y0 = int(b2[0] - b2[2] / 2), int(b2[1] - b2[2] / 2) # type: ignore
-            cv2.rectangle(frame, (x0, y0), (x0 + int(b2[2]), y0 + int(b2[2])), (0, 0, 255), 1) # type: ignore
-            cv2.putText(frame, f"searching p={p2:.2f}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2) # type: ignore
+            cv2.putText(frame, "searching", (10, 55), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7, (0, 0, 255), 2)
         cv2.putText(frame, f"{ms:.1f} ms", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
         cv2.imshow("hand", frame)
         key = cv2.waitKey(1) & 0xFF
